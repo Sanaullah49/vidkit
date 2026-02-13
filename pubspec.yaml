@@ -1,0 +1,53 @@
+name: vidkit
+description: "Smart video player for Flutter with built-in caching, preloading, playlist support, and quality switching. No more buffering, no more re-downloading. Works reliably on all platforms."
+version: 0.1.0
+homepage: https://github.com/Sanaullah49/vidkit
+repository: https://github.com/Sanaullah49/vidkit
+issue_tracker: https://github.com/Sanaullah49/vidkit/issues
+
+topics:
+  - video
+  - video-player
+  - cache
+  - media
+  - streaming
+
+screenshots:
+  - description: 'Simple video player with caching and built-in controls'
+    path: screenshots/simple_player.png
+  - description: 'Playlist with next/previous and preloading'
+    path: screenshots/playlist.png
+  - description: 'Cache manager - view, pre-cache, and clear'
+    path: screenshots/cache_manager.png
+  - description: 'Quality switching between resolutions'
+    path: screenshots/quality_switching.png
+  - description: 'Fullscreen mode with landscape rotation'
+    path: screenshots/fullscreen.png
+
+environment:
+  sdk: ^3.11.0
+  flutter: ">=1.17.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  video_player: ^2.10.1
+  path_provider: ^2.1.5
+  crypto: ^3.0.7
+  http: ^1.6.0
+  path: ^1.9.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+
+platforms:
+  android:
+  ios:
+  linux:
+  macos:
+  web:
+  windows:
