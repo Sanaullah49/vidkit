@@ -1,3 +1,14 @@
+## 0.1.1
+
+* HLS pre-cache support for VOD `.m3u8` streams
+* HLS bundle caching now downloads child playlists, segments, init files, and key files
+* Live/event HLS snapshot support with bounded playlist refresh cycles
+* Live snapshots are finalized with offline-friendly manifests (`#EXT-X-ENDLIST`)
+* Encrypted HLS edge-case support for non-HTTP key URI schemes (e.g. `skd://`)
+* Retry/backoff for transient HLS request failures
+* Cache lookup/removal/count/size now support HLS bundle entries
+* Added tests for VOD HLS, live snapshot refresh, and encrypted-key edge cases
+
 ## 0.1.0
 
 * 🎉 Initial release

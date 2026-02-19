@@ -1,4 +1,9 @@
+import 'dart:io';
+
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:vidkit/vidkit.dart';
 
 void main() {
@@ -557,6 +562,286 @@ void main() {
       final str = info.toString();
       expect(str, contains('MB'));
       expect(str, contains('3 files'));
+    });
+  });
+
+  // ─── VideoCacheManager HLS Tests ───────────────────────────────
+
+  group('VideoCacheManager HLS', () {
+    const pathProviderChannel = MethodChannel(
+      'plugins.flutter.io/path_provider',
+    );
+    late Directory tempRoot;
+
+    setUp(() async {
+      TestWidgetsFlutterBinding.ensureInitialized();
+      tempRoot = await Directory.systemTemp.createTemp('vidkit_hls_test_');
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(pathProviderChannel, (methodCall) async {
+            if (methodCall.method == 'getTemporaryDirectory') {
+              return tempRoot.path;
+            }
+            return tempRoot.path;
+          });
+    });
+
+    tearDown(() async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(pathProviderChannel, null);
+      if (tempRoot.existsSync()) {
+        await tempRoot.delete(recursive: true);
+      }
+    });
+
+    test(
+      'preCache downloads and rewrites HLS bundle for offline playback',
+      () async {
+        const base = 'https://cdn.example.com';
+        const hlsUrl = '$base/master.m3u8';
+
+        final mockedResponses = <String, http.Response>{
+          '$base/master.m3u8': http.Response(
+            '#EXTM3U\n'
+            '#EXT-X-VERSION:3\n'
+            '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio",NAME="English",'
+            'DEFAULT=YES,URI="audio/audio.m3u8"\n'
+            '#EXT-X-STREAM-INF:BANDWIDTH=1280000,AUDIO="audio"\n'
+            'video/index.m3u8\n',
+            200,
+            headers: const {
+              HttpHeaders.contentTypeHeader: 'application/vnd.apple.mpegurl',
+            },
+          ),
+          '$base/video/index.m3u8': http.Response(
+            '#EXTM3U\n'
+            '#EXT-X-TARGETDURATION:6\n'
+            '#EXT-X-KEY:METHOD=AES-128,URI="../keys/key1.key"\n'
+            '#EXT-X-MAP:URI="init.mp4"\n'
+            '#EXTINF:6.0,\n'
+            'seg1.ts\n'
+            '#EXTINF:6.0,\n'
+            'seg2.ts\n'
+            '#EXT-X-ENDLIST\n',
+            200,
+            headers: const {
+              HttpHeaders.contentTypeHeader: 'application/vnd.apple.mpegurl',
+            },
+          ),
+          '$base/audio/audio.m3u8': http.Response(
+            '#EXTM3U\n'
+            '#EXT-X-TARGETDURATION:6\n'
+            '#EXTINF:6.0,\n'
+            'a1.aac\n'
+            '#EXT-X-ENDLIST\n',
+            200,
+            headers: const {
+              HttpHeaders.contentTypeHeader: 'application/vnd.apple.mpegurl',
+            },
+          ),
+          '$base/video/init.mp4': http.Response.bytes(<int>[0, 1, 2, 3], 200),
+          '$base/video/seg1.ts': http.Response.bytes(<int>[1, 1, 1, 1, 1], 200),
+          '$base/video/seg2.ts': http.Response.bytes(<int>[2, 2, 2, 2, 2], 200),
+          '$base/audio/a1.aac': http.Response.bytes(<int>[3, 3, 3], 200),
+          '$base/keys/key1.key': http.Response.bytes(<int>[
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+            9,
+          ], 200),
+        };
+
+        final cache = VideoCacheManager(
+          directoryName: 'vidkit_hls_test_cache',
+          clientFactory: () => MockClient((request) async {
+            final response = mockedResponses[request.url.toString()];
+            return response ?? http.Response('Not Found', 404);
+          }),
+        );
+        final manifest = await cache.preCache(hlsUrl);
+
+        expect(manifest, isNotNull);
+        expect(await cache.isCached(hlsUrl), isTrue);
+
+        final rootManifest = await manifest!.readAsString();
+        expect(rootManifest, contains('playlists/'));
+        expect(rootManifest, isNot(contains('video/index.m3u8')));
+        expect(rootManifest, isNot(contains('audio/audio.m3u8')));
+
+        final files = await manifest.parent
+            .list(recursive: true, followLinks: false)
+            .where((entity) => entity is File)
+            .cast<File>()
+            .toList();
+
+        expect(files.where((file) => file.path.endsWith('.m3u8')).length, 3);
+        expect(files.any((file) => file.path.endsWith('.ts')), isTrue);
+        expect(files.any((file) => file.path.endsWith('.mp4')), isTrue);
+        expect(files.any((file) => file.path.endsWith('.aac')), isTrue);
+        expect(files.any((file) => file.path.endsWith('.key')), isTrue);
+
+        final info = await cache.info;
+        expect(info.fileCount, 1);
+
+        final removed = await cache.removeFromCache(hlsUrl);
+        expect(removed, isTrue);
+        expect(await cache.getCachedFile(hlsUrl), isNull);
+      },
+    );
+
+    test(
+      'preCache refreshes live media playlists and finalizes snapshot',
+      () async {
+        const base = 'https://live.example.com';
+        const liveUrl = '$base/channel/live.m3u8';
+
+        const playlist1 =
+            '#EXTM3U\n'
+            '#EXT-X-VERSION:7\n'
+            '#EXT-X-TARGETDURATION:2\n'
+            '#EXT-X-MEDIA-SEQUENCE:100\n'
+            '#EXT-X-PRELOAD-HINT:TYPE=PART,URI="seg102.part"\n'
+            '#EXTINF:2.0,\n'
+            'seg100.ts\n'
+            '#EXTINF:2.0,\n'
+            'seg101.ts\n';
+
+        const playlist2 =
+            '#EXTM3U\n'
+            '#EXT-X-VERSION:7\n'
+            '#EXT-X-TARGETDURATION:2\n'
+            '#EXT-X-MEDIA-SEQUENCE:101\n'
+            '#EXTINF:2.0,\n'
+            'seg101.ts\n'
+            '#EXTINF:2.0,\n'
+            'seg102.ts\n';
+
+        const playlist3 =
+            '#EXTM3U\n'
+            '#EXT-X-VERSION:7\n'
+            '#EXT-X-TARGETDURATION:2\n'
+            '#EXT-X-MEDIA-SEQUENCE:102\n'
+            '#EXTINF:2.0,\n'
+            'seg102.ts\n'
+            '#EXTINF:2.0,\n'
+            'seg103.ts\n';
+
+        final playlistSnapshots = <String>[playlist1, playlist2, playlist3];
+        final requestCounts = <String, int>{};
+        final staticResponses = <String, http.Response>{
+          '$base/channel/seg100.ts': http.Response.bytes(<int>[1, 0, 0], 200),
+          '$base/channel/seg101.ts': http.Response.bytes(<int>[1, 0, 1], 200),
+          '$base/channel/seg102.ts': http.Response.bytes(<int>[1, 0, 2], 200),
+          '$base/channel/seg103.ts': http.Response.bytes(<int>[1, 0, 3], 200),
+          '$base/channel/seg102.part': http.Response.bytes(<int>[7, 7], 200),
+        };
+
+        final cache = VideoCacheManager(
+          directoryName: 'vidkit_hls_live_cache',
+          hlsOptions: const HlsCacheOptions(
+            livePlaylistUpdates: 2,
+            livePlaylistUpdateInterval: Duration.zero,
+            skipMissingLiveSegments: true,
+            finalizeLiveAsVod: true,
+          ),
+          clientFactory: () => MockClient((request) async {
+            final url = request.url.toString();
+            requestCounts.update(url, (value) => value + 1, ifAbsent: () => 1);
+
+            if (url == liveUrl) {
+              final call = (requestCounts[url] ?? 1) - 1;
+              final index = call < playlistSnapshots.length
+                  ? call
+                  : playlistSnapshots.length - 1;
+              return http.Response(
+                playlistSnapshots[index],
+                200,
+                headers: const {
+                  HttpHeaders.contentTypeHeader:
+                      'application/vnd.apple.mpegurl',
+                },
+              );
+            }
+
+            return staticResponses[url] ?? http.Response('Not Found', 404);
+          }),
+        );
+
+        final manifest = await cache.preCache(liveUrl);
+        expect(manifest, isNotNull);
+
+        final manifestText = await manifest!.readAsString();
+        expect(manifestText, contains('#EXT-X-ENDLIST'));
+        expect(
+          manifestText.toUpperCase(),
+          isNot(contains('#EXT-X-PRELOAD-HINT')),
+        );
+        expect(manifestText, isNot(contains('seg100.ts')));
+        expect(manifestText, isNot(contains('seg101.ts')));
+        expect(manifestText, isNot(contains('seg102.ts')));
+        expect(manifestText, isNot(contains('seg103.ts')));
+
+        expect(requestCounts[liveUrl], 3);
+
+        final files = await manifest.parent
+            .list(recursive: true, followLinks: false)
+            .where((entity) => entity is File)
+            .cast<File>()
+            .toList();
+
+        expect(files.any((file) => file.path.endsWith('.ts')), isTrue);
+        expect(files.any((file) => file.path.endsWith('.part')), isTrue);
+      },
+    );
+
+    test('preCache keeps non-http encryption key URIs unchanged', () async {
+      const base = 'https://secure.example.com';
+      const hlsUrl = '$base/encrypted/master.m3u8';
+
+      final mockedResponses = <String, http.Response>{
+        '$base/encrypted/master.m3u8': http.Response(
+          '#EXTM3U\n'
+          '#EXT-X-VERSION:6\n'
+          '#EXT-X-TARGETDURATION:6\n'
+          '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://asset-key-id"\n'
+          '#EXTINF:6.0,\n'
+          'seg1.ts\n'
+          '#EXT-X-ENDLIST\n',
+          200,
+          headers: const {
+            HttpHeaders.contentTypeHeader: 'application/vnd.apple.mpegurl',
+          },
+        ),
+        '$base/encrypted/seg1.ts': http.Response.bytes(<int>[8, 8, 8], 200),
+      };
+
+      final cache = VideoCacheManager(
+        directoryName: 'vidkit_hls_key_cache',
+        clientFactory: () => MockClient((request) async {
+          final response = mockedResponses[request.url.toString()];
+          return response ?? http.Response('Not Found', 404);
+        }),
+      );
+
+      final manifest = await cache.preCache(hlsUrl);
+      expect(manifest, isNotNull);
+      expect(await cache.isCached(hlsUrl), isTrue);
+
+      final manifestText = await manifest!.readAsString();
+      expect(manifestText, contains('URI="skd://asset-key-id"'));
+      expect(manifestText, isNot(contains('seg1.ts')));
     });
   });
 

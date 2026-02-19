@@ -1,6 +1,6 @@
 name: vidkit
 description: "Smart video player for Flutter with built-in caching, preloading, playlist support, and quality switching. No more buffering, no more re-downloading. Works reliably on all platforms."
-version: 0.1.0
+version: 0.1.1
 homepage: https://github.com/Sanaullah49/vidkit
 repository: https://github.com/Sanaullah49/vidkit
 issue_tracker: https://github.com/Sanaullah49/vidkit/issues

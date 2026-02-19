@@ -26,6 +26,7 @@ VidKit solves the 6+ year old pain point of Flutter's video_player — no cachin
 ## ✨ Features
 
 - 📦 **Smart Caching** — Videos are cached automatically. Play once, instant replay forever
+- 🧩 **Advanced HLS Pre-cache** — VOD + live snapshot caching with encrypted stream edge-case handling
 - 🔄 **Preloading** — Next video in playlist is pre-cached in the background
 - 🎵 **Playlist Support** — Next, previous, jump to, shuffle, add, remove
 - 🎚️ **Quality Switching** — Switch between 1080p, 720p, 480p seamlessly
@@ -44,7 +45,7 @@ VidKit solves the 6+ year old pain point of Flutter's video_player — no cachin
 
 ```yaml
 dependencies:
-  vidkit: ^0.1.0
+  vidkit: ^0.1.1
 ```
 
 ### Simplest Possible Usage
@@ -168,6 +169,9 @@ final isCached = await cache.isCached('https://example.com/video.mp4');
 // Pre-cache a video
 await cache.preCache('https://example.com/video.mp4');
 
+// Pre-cache an HLS VOD stream (.m3u8)
+await cache.preCache('https://example.com/master.m3u8');
+
 // Cache with progress tracking
 cache.cacheVideo('https://example.com/video.mp4').listen((progress) {
   print('${(progress * 100).toInt()}% downloaded');
@@ -178,6 +182,27 @@ await cache.removeFromCache('https://example.com/video.mp4');
 
 // Clear entire cache
 await cache.clearCache();
+```
+
+### HLS Pre-cache Notes
+
+- Supports VOD HLS (`.m3u8`) and live/event snapshot caching
+- Downloads referenced child playlists, segments, init files, and key files
+- Converts live snapshots to offline-friendly manifests (`#EXT-X-ENDLIST`)
+- Preserves non-HTTP key URI schemes (for example `skd://`) without failing cache build
+- HTTP headers are applied to HLS child requests as well
+
+### HLS Tuning Options
+
+```dart
+final cache = VideoCacheManager(
+  hlsOptions: const HlsCacheOptions(
+    livePlaylistUpdates: 2,                 // extra live refresh cycles
+    requestRetries: 2,                      // retry transient failures
+    skipMissingLiveSegments: true,          // tolerate disappearing live segments
+    finalizeLiveAsVod: true,                // append ENDLIST for offline snapshots
+  ),
+);
 ```
 
 ### Playback Controls
